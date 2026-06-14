@@ -152,6 +152,88 @@ function roundRect(x, y, w, h, r) {
 }
 
 /* ============================================================
+   AUDIO — music + sound effects synthesized with the Web Audio
+   API, so there are no audio files to load. Browsers block sound
+   until a user gesture, so it all starts on the first tap/press.
+   The on-screen speaker (or the "M" key) toggles mute.
+   ============================================================ */
+const Snd = (() => {
+  let ac, master, musicGain, sfxGain, musicTimer = null, noteIdx = 0, nextNoteTime = 0;
+  let muted = false;
+  const N = { C: 261.63, D: 293.66, E: 329.63, F: 349.23, G: 392.0, A: 440.0, B: 493.88, C5: 523.25, R: 0 };
+  // Jingle Bells chorus (public domain) — [frequency, beats]
+  const MELODY = [
+    [N.E,1],[N.E,1],[N.E,2],[N.E,1],[N.E,1],[N.E,2],
+    [N.E,1],[N.G,1],[N.C,1.5],[N.D,0.5],[N.E,4],
+    [N.F,1],[N.F,1],[N.F,1.5],[N.F,0.5],[N.F,1],[N.E,1],[N.E,1],[N.E,0.5],[N.E,0.5],
+    [N.E,1],[N.D,1],[N.D,1],[N.E,1],[N.D,2],[N.G,2],[N.R,2],
+  ];
+  const beat = 60 / 150;   // 150 BPM
+  function ensure() {
+    if (ac) return true;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    ac = new AC();
+    master = ac.createGain(); master.gain.value = muted ? 0 : 0.9; master.connect(ac.destination);
+    musicGain = ac.createGain(); musicGain.gain.value = 0.10; musicGain.connect(master);
+    sfxGain = ac.createGain(); sfxGain.gain.value = 0.5; sfxGain.connect(master);
+    return true;
+  }
+  function tone(freq, t, dur, type, vol, freqEnd, dest) {
+    if (!freq || !ac) return;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (freqEnd) o.frequency.exponentialRampToValueAtTime(Math.max(1, freqEnd), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.connect(g); g.connect(dest || sfxGain);
+    o.start(t); o.stop(t + dur + 0.03);
+  }
+  function scheduler() {                     // lookahead note scheduler keeps timing tight
+    if (!ac) return;
+    while (nextNoteTime < ac.currentTime + 0.2) {
+      const [f, b] = MELODY[noteIdx], d = b * beat;
+      if (f) {
+        tone(f, nextNoteTime, d * 0.9, "triangle", 0.6, 0, musicGain);
+        tone(f / 2, nextNoteTime, d * 0.9, "sine", 0.3, 0, musicGain);   // soft octave-down body
+      }
+      nextNoteTime += d;
+      noteIdx = (noteIdx + 1) % MELODY.length;
+    }
+  }
+  return {
+    init() {                                 // call from the first user gesture
+      if (!ensure()) return;
+      if (ac.state === "suspended") ac.resume();
+      if (!musicTimer) { nextNoteTime = ac.currentTime + 0.08; musicTimer = setInterval(scheduler, 45); }
+    },
+    toggleMute() { muted = !muted; if (ac) master.gain.setTargetAtTime(muted ? 0 : 0.9, ac.currentTime, 0.02); return muted; },
+    isMuted() { return muted; },
+    launch() { if (ac) tone(680, ac.currentTime, 0.14, "sawtooth", 0.4, 220); },                                   // cane drops
+    grab()   { if (ac) { const t = ac.currentTime; tone(340, t, 0.07, "square", 0.45); tone(170, t + 0.02, 0.09, "square", 0.3); } }, // catch
+    win()    { if (ac) { const t = ac.currentTime; [N.C, N.E, N.G, N.C5, N.G, N.C5].forEach((f, i) => tone(f, t + i * 0.1, 0.24, "triangle", 0.55)); } },
+    fail()   { if (ac) { const t = ac.currentTime; tone(300, t, 0.18, "sawtooth", 0.4, 150); tone(150, t + 0.17, 0.28, "sawtooth", 0.4, 95); } }, // sad slip
+    bounce(v){ if (ac) tone(150, ac.currentTime, 0.06, "sine", Math.min(0.4, 0.12 + v * 0.01), 80); },             // soft thud
+  };
+})();
+
+// Speaker (mute) button, top-left corner. muteBox() is its screen-pixel hit area.
+function muteBox() { const s = Math.max(34, H * 0.06), m = Math.max(10, H * 0.022); return { x: m, y: m, w: s, h: s }; }
+function eventPoint(e) {
+  if (!e) return null;
+  const tp = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+  if (tp) return { x: tp.clientX, y: tp.clientY };
+  if (typeof e.clientX === "number") return { x: e.clientX, y: e.clientY };
+  return null;
+}
+function hitMute(e) {
+  const p = eventPoint(e); if (!p) return false;
+  const b = muteBox();
+  return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+}
+
+/* ============================================================
    CANDY-CANE GRABBER + GAME LOOP
      IDLE   — cane sweeps left/right at the top, waiting for input
      SEEK   — slide across to the chosen box
@@ -208,6 +290,7 @@ function startPlay() {
   const b = boxOfSlot(game.target);
   game.slipHookY = b.hookY - (b.hookY - TOP_HOOK_Y) * (0.45 + Math.random() * 0.35);
   game.phase = "SEEK";
+  Snd.launch();
 }
 // Press-and-HOLD: holding Space, the mouse button, or a finger on the screen
 // keeps launching the next attempt as soon as the cane is free again — the loop
@@ -215,11 +298,20 @@ function startPlay() {
 // touchstart's preventDefault also blocks scroll/zoom and the synthetic mouse
 // events, so touch and mouse never double-fire.
 let held = false, heldSince = 0;
-function pressDown(e) { if (e) e.preventDefault(); if (held) return; held = true; heldSince = tick; startPlay(); }
+function pressDown(e) {
+  if (e) e.preventDefault();
+  Snd.init();                                                  // first gesture unlocks audio + starts music
+  if (hitMute(e)) { Snd.toggleMute(); held = false; return; }  // tapping the speaker toggles sound, not a play
+  if (held) return;
+  held = true; heldSince = tick; startPlay();
+}
 function pressUp(e) { if (e) e.preventDefault(); held = false; }
-window.addEventListener("keydown", e => { if (e.code === "Space") pressDown(e); });
+window.addEventListener("keydown", e => {
+  if (e.code === "Space") pressDown(e);
+  else if (e.code === "KeyM") { Snd.init(); Snd.toggleMute(); }
+});
 window.addEventListener("keyup",   e => { if (e.code === "Space") pressUp(); });
-window.addEventListener("mousedown", () => pressDown());
+window.addEventListener("mousedown", e => pressDown(e));
 window.addEventListener("mouseup",   () => pressUp());
 window.addEventListener("touchstart", e => pressDown(e), { passive: false });
 window.addEventListener("touchend",   e => pressUp(e), { passive: false });
@@ -233,6 +325,7 @@ function startSlip() {
   drop.vy = -2; drop.angle = 0; drop.angV = 0; drop.grounded = false;
   game.grabbed = false;
   game.phase = "CANE_UP";               // cane recoils empty back to the top
+  Snd.fail();
 }
 
 function updateGame() {
@@ -253,7 +346,7 @@ function updateGame() {
     }
     case "LOWER":
       game.hy += SPEED_Y;
-      if (game.hy >= b.hookY) { game.hy = b.hookY; game.grabbed = true; game.phase = "GRAB"; game.timer = 20; }
+      if (game.hy >= b.hookY) { game.hy = b.hookY; game.grabbed = true; game.phase = "GRAB"; game.timer = 20; Snd.grab(); }
       break;
     case "GRAB":
       if (--game.timer <= 0) game.phase = "RAISE";
@@ -264,6 +357,7 @@ function updateGame() {
       if (game.hy <= TOP_HOOK_Y) {                 // a win rides all the way up
         game.hy = TOP_HOOK_Y; game.phase = "WIN_HOLD"; game.timer = 165;
         game.popup = { text: "Congratulations! You won " + game.prize.name + "!", t: 185 };
+        Snd.win();
       }
       break;
     case "WIN_HOLD":
@@ -295,6 +389,7 @@ function updateDrop() {
       drop.vy = -drop.vy * RESTITUTION;    // bounce
       const kick = Math.min(0.15, Math.abs(drop.vy) * 0.006 + 0.03);
       drop.angV += (Math.random() < 0.5 ? -1 : 1) * kick;   // knock it rocking
+      Snd.bounce(Math.abs(drop.vy));
     } else {
       drop.vy = 0; drop.grounded = true;
     }
@@ -352,8 +447,16 @@ function drawDrop() {
   cx.restore();
 }
 
-/* ---------- HUD: play prompt + prize popup ---------- */
+/* ---------- HUD: play prompt + prize popup + mute button ---------- */
 function drawHUD() {
+  // speaker / mute toggle (top-left)
+  const mb = muteBox();
+  cx.save();
+  cx.font = Math.round(mb.h * 0.78) + "px Arial";
+  cx.textAlign = "center"; cx.textBaseline = "middle";
+  cx.fillText(Snd.isMuted() ? "🔇" : "🔊", mb.x + mb.w / 2, mb.y + mb.h / 2);
+  cx.restore();
+
   if (game.phase === "IDLE" && !drop.active && !game.popup && Math.floor(tick / 30) % 2 === 0) {
     cx.font = "bold " + Math.round(H * 0.030) + "px Arial";
     cx.fillStyle = "rgba(20,50,80,0.92)";

@@ -165,7 +165,7 @@ const cane = new Image(); cane.src = "candycane.png";
 const CANE_SCALE = 0.6;          // cane size in art units
 const CANE_GP = [70, 1305];      // hook "catch" point within the cane source image
 const TOP_HOOK_Y = 120;          // resting hook height near the top of the scene
-const SWEEP_SPEED = 13.5, SPEED_X = 16.5, SPEED_Y = 13.5;
+const SWEEP_SPEED = 13.5*10, SPEED_X = 16.5*10, SPEED_Y = 13.5*10;
 const SWEEP_MIN = 175, SWEEP_MAX = ART_W - 175;
 const BOW_FX = 0.50, BOW_FY = 0.12; // ribbon centre as a fraction of the box
 const LIFT_FRAC = 0.21;             // hook sits this far (× box height) above the ribbon
@@ -191,7 +191,11 @@ function boxOfSlot(i) {
 
 // Begin a play: roll win/loss, choose which box to visit.
 function startPlay() {
-  if (game.phase !== "IDLE" || drop.active) return;
+  if (game.phase !== "IDLE") return;
+  // A previously slipped box may still be bouncing. Don't make the player wait
+  // it out — settle it instantly (it's already at its resting spot during the
+  // bounce, so this just drops the tilt) and start the next attempt now.
+  if (drop.active) { drop.active = false; drop.angle = 0; drop.angV = 0; }
   game.prize = rollPrize();                 // null => no win
   game.result = game.prize ? "win" : "loss";
   if (game.result === "win") {
@@ -205,12 +209,22 @@ function startPlay() {
   game.slipHookY = b.hookY - (b.hookY - TOP_HOOK_Y) * (0.45 + Math.random() * 0.35);
   game.phase = "SEEK";
 }
-window.addEventListener("keydown", e => { if (e.code === "Space") { e.preventDefault(); startPlay(); } });
-window.addEventListener("mousedown", startPlay);
-// Touch: preventDefault stops the browser's tap gestures (scroll/zoom) and the
-// synthetic mousedown that would otherwise follow. startPlay is a no-op unless a
-// play is ready, so an extra event can never start two plays.
-window.addEventListener("touchstart", e => { e.preventDefault(); startPlay(); }, { passive: false });
+// Press-and-HOLD: holding Space, the mouse button, or a finger on the screen
+// keeps launching the next attempt as soon as the cane is free again — the loop
+// (in update) re-fires startPlay while `held` and IDLE. A quick tap fires once.
+// touchstart's preventDefault also blocks scroll/zoom and the synthetic mouse
+// events, so touch and mouse never double-fire.
+let held = false, heldSince = 0;
+function pressDown(e) { if (e) e.preventDefault(); if (held) return; held = true; heldSince = tick; startPlay(); }
+function pressUp(e) { if (e) e.preventDefault(); held = false; }
+window.addEventListener("keydown", e => { if (e.code === "Space") pressDown(e); });
+window.addEventListener("keyup",   e => { if (e.code === "Space") pressUp(); });
+window.addEventListener("mousedown", () => pressDown());
+window.addEventListener("mouseup",   () => pressUp());
+window.addEventListener("touchstart", e => pressDown(e), { passive: false });
+window.addEventListener("touchend",   e => pressUp(e), { passive: false });
+window.addEventListener("touchcancel", () => pressUp());
+window.addEventListener("blur", () => pressUp());   // safety: never get stuck "held"
 
 function startSlip() {
   const b = boxOfSlot(game.target);
@@ -298,6 +312,7 @@ function updateDrop() {
 
 function update() {
   tick++;
+  if (held && game.phase === "IDLE" && tick - heldSince >= 12) startPlay();   // hold to keep playing (after a brief initial delay, like key-repeat)
   updateGame();
   updateDrop();
   if (game.popup && --game.popup.t <= 0) game.popup = null;

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyCokeRewards Holiday Game (2011)</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #000;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    font-family: Arial, Helvetica, sans-serif;
+    user-select: none;
+  }
+  #wrap {
+    position: fixed;
+    inset: 0;
+    width: 100%; height: 100%;
+  }
+  canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="900" height="600"></canvas></div>
+<script>
+"use strict";
+const cv = document.getElementById("game");
+const cx = cv.getContext("2d");
+let W = cv.width, H = cv.height;
+
+// The artwork is authored at this native resolution; everything is drawn in
+// these coordinates and scaled per-axis to fill the window, so the boxes stay
+// aligned to the snow imprints at any size.
+const ART_W = 1463, ART_H = 1075;
+
+function resize() {
+  W = cv.width = window.innerWidth;
+  H = cv.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ============================================================
+   LAYERS
+     noboxes.png  — the snow scene with empty box imprints (bottom)
+     boxes        — gift boxes dropped into the imprints
+     foreground1  — mid snow drift overlay
+     foreground2  — front snow lip overlay
+   ============================================================ */
+const bgImage = new Image(); bgImage.src = "noboxes.png";
+const fg1 = new Image();     fg1.src = "foreground1.png";
+const fg2 = new Image();     fg2.src = "foreground2.png";
+
+const BOX_NAMES = ["gap", "coke", "southwest", "subway", "visa", "amc"];
+const BOX_IMGS = {};
+for (const n of BOX_NAMES) { const im = new Image(); im.src = "boxes/" + n + ".png"; BOX_IMGS[n] = im; }
+
+// Imprint slots, in art coordinates. cx = horizontal centre, baseY = where the
+// box's bottom rests, w = displayed box width (height follows the box's aspect).
+const BACK_SLOTS = [
+  { cx: 200,  baseY: 650, w: 220 },
+  { cx: 470,  baseY: 660, w: 220 },
+  { cx: 750,  baseY: 660, w: 220 },
+  { cx: 1020, baseY: 660, w: 220 },
+  { cx: 1290, baseY: 650, w: 220 },
+];
+const FRONT_SLOTS = [
+  { cx: 225,  baseY: 985, w: 220 },
+  { cx: 540,  baseY: 1000, w: 220 },
+  { cx: 920,  baseY: 1000, w: 220 },
+  { cx: 1250, baseY: 1000, w: 220 },
+];
+const ALL_SLOTS = [...BACK_SLOTS, ...FRONT_SLOTS];
+const MID_FOREGROUND_BOTTOM_Y = 720;
+
+// Randomly assign boxes to every imprint. The first six slots take one of each
+// brand (shuffled), so there is ALWAYS at least one of every branded box on
+// screen; the remaining slots are filled with random brands, then shuffled.
+function pickBox() { return BOX_NAMES[Math.floor(Math.random() * BOX_NAMES.length)]; }
+function shuffled(items) {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+function assignBoxes(slots) {
+  const assign = shuffled(BOX_NAMES);          // guarantees one of every brand
+  while (assign.length < slots.length) assign.push(pickBox());
+  return shuffled(assign);
+}
+const boxAssign = assignBoxes(ALL_SLOTS);
+
+/* ============================================================
+   PRIZES — real MyCokeRewards weighted odds. Each prize is won
+   out of a particular branded box. A weighted roll picks a prize
+   or "no win"; the no-win weight is set so each prize keeps its
+   exact published per-play odds (Snapfish & Domino's removed).
+   ============================================================ */
+const PRIZES = [
+  { name: "$1,000 Visa Gift Card",          brand: "visa",      weight: 45 },     // 1 in 24,926
+  { name: "$250 Southwest Gift Card",       brand: "southwest", weight: 90 },     // 1 in 12,463
+  { name: "$100 Visa Gift Card",            brand: "visa",      weight: 1080 },   // 1 in 1,039
+  { name: "AMC Voucher (2 tix + 2 drinks)", brand: "amc",       weight: 5000 },   // 1 in 224
+  { name: "$5 Subway Gift Card",            brand: "subway",    weight: 6480 },   // 1 in 173
+  { name: "Free Coke 12-Pack Coupon",       brand: "coke",      weight: 6480 },   // 1 in 173
+  { name: "Free Coke Bottle Coupon",        brand: "coke",      weight: 12960 },  // 1 in 87
+  { name: "10 MCR Bonus Points",            brand: "coke",      weight: 19705 },  // 1 in 57
+];
+const NO_WIN_WEIGHT = 1069830;   // chosen so total = 1,121,670 and every prize keeps its listed odds
+const TOTAL_WEIGHT = NO_WIN_WEIGHT + PRIZES.reduce((s, p) => s + p.weight, 0);
+
+// Weighted roll: returns a prize, or null for "no win".
+function rollPrize() {
+  let r = Math.random() * TOTAL_WEIGHT;
+  for (const p of PRIZES) { r -= p.weight; if (r < 0) return p; }
+  return null;
+}
+
+/* ============================================================
+   RENDER HELPERS
+   ============================================================ */
+const ready = im => im.complete && im.naturalWidth > 0;
+
+function drawLayer(im) {
+  if (ready(im)) cx.drawImage(im, 0, 0, W, H);
+}
+function drawLayerTop(im, bottomY) {
+  if (!ready(im)) return;
+  const sy = H / ART_H;
+  cx.drawImage(im, 0, 0, ART_W, bottomY, 0, 0, W, bottomY * sy);
+}
+function drawSlots(slots, assign, skip) {
+  const sx = W / ART_W, sy = H / ART_H;
+  for (let i = 0; i < slots.length; i++) {
+    if (i === skip) continue;
+    const s = slots[i], im = BOX_IMGS[assign[i]];
+    if (!ready(im)) continue;
+    const w = s.w, h = w * im.naturalHeight / im.naturalWidth;
+    const x = s.cx - w / 2, y = s.baseY - h;
+    cx.drawImage(im, x * sx, y * sy, w * sx, h * sy);
+  }
+}
+function roundRect(x, y, w, h, r) {
+  cx.beginPath();
+  cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r);
+  cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath();
+}
+
+/* ============================================================
+   CANDY-CANE GRABBER + GAME LOOP
+     IDLE   — cane sweeps left/right at the top, waiting for input
+     SEEK   — slide across to the chosen box
+     LOWER  — drop so the hook tucks BEHIND the box's ribbon
+     GRAB   — brief pause as it catches
+     RAISE  — lift the box; a win rides to the top, a loss slips free
+     WIN_HOLD / RETURN — show the prize, then set the box back
+     (a slipped box falls and wobble-bounces back into its imprint)
+   ============================================================ */
+const cane = new Image(); cane.src = "candycane.png";
+const CANE_SCALE = 0.6;          // cane size in art units
+const CANE_GP = [70, 1305];      // hook "catch" point within the cane source image
+const TOP_HOOK_Y = 120;          // resting hook height near the top of the scene
+const SWEEP_SPEED = 4.5, SPEED_X = 5.5, SPEED_Y = 4.5;
+const SWEEP_MIN = 175, SWEEP_MAX = ART_W - 175;
+const BOW_FX = 0.50, BOW_FY = 0.12; // ribbon centre as a fraction of the box
+const LIFT_FRAC = 0.21;             // hook sits this far (× box height) above the ribbon
+
+const ACTIVE = new Set(["LOWER", "GRAB", "RAISE", "WIN_HOLD", "RETURN"]);
+
+const game = {
+  phase: "IDLE", hx: ART_W / 2, hy: TOP_HOOK_Y, dir: 1,
+  target: -1, grabbed: false, result: null, prize: null,
+  slipHookY: 0, timer: 0, popup: null,
+};
+// A slipped box, falling and wobble-bouncing back into its imprint.
+const drop = { active: false, slot: -1, bowCy: 0, vy: 0, angle: 0, angV: 0, grounded: false };
+let tick = 0;
+
+function boxOfSlot(i) {
+  const s = ALL_SLOTS[i], im = BOX_IMGS[boxAssign[i]];
+  const w = s.w, h = ready(im) ? w * im.naturalHeight / im.naturalWidth : w * 1.14;
+  const bowY = (s.baseY - h) + BOW_FY * h;
+  const lift = LIFT_FRAC * h;
+  return { cx: s.cx, baseY: s.baseY, w, h, bowY, lift, hookY: bowY - lift, im };
+}
+
+// Begin a play: roll win/loss, choose which box to visit.
+function startPlay() {
+  if (game.phase !== "IDLE" || drop.active) return;
+  game.prize = rollPrize();                 // null => no win
+  game.result = game.prize ? "win" : "loss";
+  if (game.result === "win") {
+    // visit a random box whose brand matches the prize (always exists on screen)
+    const matches = boxAssign.map((b, i) => (b === game.prize.brand ? i : -1)).filter(i => i >= 0);
+    game.target = matches[Math.floor(Math.random() * matches.length)];
+  } else {
+    game.target = Math.floor(Math.random() * ALL_SLOTS.length); // any box
+  }
+  const b = boxOfSlot(game.target);
+  game.slipHookY = b.hookY - (b.hookY - TOP_HOOK_Y) * (0.45 + Math.random() * 0.35);
+  game.phase = "SEEK";
+}
+window.addEventListener("keydown", e => { if (e.code === "Space") { e.preventDefault(); startPlay(); } });
+window.addEventListener("mousedown", startPlay);
+
+function startSlip() {
+  const b = boxOfSlot(game.target);
+  drop.active = true; drop.slot = game.target;
+  drop.bowCy = game.hy + b.lift;        // box leaves the hook from here
+  drop.vy = -2; drop.angle = 0; drop.angV = 0; drop.grounded = false;
+  game.grabbed = false;
+  game.phase = "CANE_UP";               // cane recoils empty back to the top
+}
+
+function updateGame() {
+  const b = boxOfSlot(game.target < 0 ? 0 : game.target);
+  switch (game.phase) {
+    case "IDLE":
+      game.hy = TOP_HOOK_Y;
+      game.hx += SWEEP_SPEED * game.dir;
+      if (game.hx > SWEEP_MAX) { game.hx = SWEEP_MAX; game.dir = -1; }
+      if (game.hx < SWEEP_MIN) { game.hx = SWEEP_MIN; game.dir = 1; }
+      break;
+    case "SEEK": {
+      const dx = b.cx - game.hx;
+      game.hx += Math.sign(dx) * Math.min(Math.abs(dx), SPEED_X);
+      game.hy = TOP_HOOK_Y;
+      if (Math.abs(dx) < 1) { game.hx = b.cx; game.phase = "LOWER"; }
+      break;
+    }
+    case "LOWER":
+      game.hy += SPEED_Y;
+      if (game.hy >= b.hookY) { game.hy = b.hookY; game.grabbed = true; game.phase = "GRAB"; game.timer = 20; }
+      break;
+    case "GRAB":
+      if (--game.timer <= 0) game.phase = "RAISE";
+      break;
+    case "RAISE":
+      game.hy -= SPEED_Y;
+      if (game.result === "loss" && game.hy <= game.slipHookY) { startSlip(); break; }
+      if (game.hy <= TOP_HOOK_Y) {                 // a win rides all the way up
+        game.hy = TOP_HOOK_Y; game.phase = "WIN_HOLD"; game.timer = 165;
+        game.popup = { text: "Congratulations! You won " + game.prize.name + "!", t: 185 };
+      }
+      break;
+    case "WIN_HOLD":
+      if (--game.timer <= 0) game.phase = "RETURN";
+      break;
+    case "RETURN":
+      game.hy += SPEED_Y;
+      if (game.hy >= b.hookY) { game.hy = b.hookY; game.grabbed = false; game.phase = "RISE_EMPTY"; }
+      break;
+    case "CANE_UP":
+    case "RISE_EMPTY":
+      game.hy -= SPEED_Y;
+      if (game.hy <= TOP_HOOK_Y) { game.hy = TOP_HOOK_Y; game.phase = "IDLE"; game.target = -1; }
+      break;
+  }
+}
+
+// Falling / bouncing box physics for a slipped (lost) grab.
+const GRAV = 1.3, RESTITUTION = 0.42, BOUNCE_STOP = 3.5;
+const ANG_STIFF = 0.11, ANG_DAMP = 0.90;
+function updateDrop() {
+  if (!drop.active) return;
+  const b = boxOfSlot(drop.slot);
+  const groundCy = b.bowY;                 // resting ribbon-centre y
+  drop.vy += GRAV; drop.bowCy += drop.vy;
+  if (drop.bowCy >= groundCy) {            // hit the snow
+    drop.bowCy = groundCy;
+    if (Math.abs(drop.vy) > BOUNCE_STOP) {
+      drop.vy = -drop.vy * RESTITUTION;    // bounce
+      const kick = Math.min(0.30, Math.abs(drop.vy) * 0.012 + 0.06);
+      drop.angV += (Math.random() < 0.5 ? -1 : 1) * kick;   // knock it rocking
+    } else {
+      drop.vy = 0; drop.grounded = true;
+    }
+  }
+  if (drop.grounded || drop.bowCy >= groundCy - 1) {
+    // damped left/right rocking that quickly tapers off
+    drop.angV += -ANG_STIFF * drop.angle;
+    drop.angV *= ANG_DAMP;
+    drop.angle += drop.angV;
+  }
+  if (drop.grounded && Math.abs(drop.angle) < 0.004 && Math.abs(drop.angV) < 0.004) {
+    drop.active = false; drop.angle = 0;   // settled — back to a normal resting box
+  }
+}
+
+function update() {
+  tick++;
+  updateGame();
+  updateDrop();
+  if (game.popup && --game.popup.t <= 0) game.popup = null;
+}
+
+/* ---------- drawing the cane, the carried box, the falling box ---------- */
+function drawCane() {
+  if (!ready(cane)) return;
+  const sx = W / ART_W, sy = H / ART_H;
+  const w = cane.naturalWidth * CANE_SCALE, h = cane.naturalHeight * CANE_SCALE;
+  const tlx = game.hx - CANE_GP[0] * CANE_SCALE;
+  const tly = game.hy - CANE_GP[1] * CANE_SCALE;
+  cx.drawImage(cane, tlx * sx, tly * sy, w * sx, h * sy);
+}
+// Targeted box drawn ON TOP of the cane, so the hook sits behind its ribbon.
+function drawActiveBox() {
+  if (!ACTIVE.has(game.phase)) return;
+  const b = boxOfSlot(game.target);
+  if (!ready(b.im)) return;
+  const sx = W / ART_W, sy = H / ART_H;
+  const bowCx = game.grabbed ? game.hx : b.cx;
+  const bowCy = game.grabbed ? game.hy + b.lift : b.bowY;
+  const x = bowCx - BOW_FX * b.w, y = bowCy - BOW_FY * b.h;
+  cx.drawImage(b.im, x * sx, y * sy, b.w * sx, b.h * sy);
+}
+function drawDrop() {
+  if (!drop.active) return;
+  const b = boxOfSlot(drop.slot);
+  if (!ready(b.im)) return;
+  const sx = W / ART_W, sy = H / ART_H;
+  const topY = drop.bowCy - BOW_FY * b.h;
+  const pivotX = b.cx, pivotY = topY + b.h;          // rock about the box's bottom centre
+  cx.save();
+  cx.translate(pivotX * sx, pivotY * sy);
+  cx.rotate(drop.angle);
+  cx.drawImage(b.im, (-b.w / 2) * sx, (-b.h) * sy, b.w * sx, b.h * sy);
+  cx.restore();
+}
+
+/* ---------- HUD: play prompt + prize popup ---------- */
+function drawHUD() {
+  if (game.phase === "IDLE" && !drop.active && !game.popup && Math.floor(tick / 30) % 2 === 0) {
+    cx.font = "bold " + Math.round(H * 0.030) + "px Arial";
+    cx.fillStyle = "rgba(20,50,80,0.92)";
+    cx.textAlign = "center";
+    cx.fillText("Press SPACE or click to drop the candy cane!", W / 2, H * 0.93);
+  }
+  if (game.popup) {
+    const a = Math.min(1, game.popup.t / 25);
+    cx.save(); cx.globalAlpha = a;
+    cx.font = "bold " + Math.round(H * 0.040) + "px Arial";
+    cx.textAlign = "center";
+    const txt = game.popup.text;
+    const tw = cx.measureText(txt).width;
+    const padX = H * 0.045, padY = H * 0.035;
+    const bw = tw + padX * 2, bh = H * 0.040 + padY * 2;
+    const bx = W / 2 - bw / 2, by = H * 0.16;
+    cx.fillStyle = "rgba(16,38,28,0.90)";
+    roundRect(bx, by, bw, bh, H * 0.02); cx.fill();
+    cx.lineWidth = Math.max(2, H * 0.004); cx.strokeStyle = "#ffd34d";
+    roundRect(bx, by, bw, bh, H * 0.02); cx.stroke();
+    cx.fillStyle = "#fff";
+    cx.fillText(txt, W / 2, by + bh / 2 + H * 0.014);
+    cx.restore();
+  }
+}
+
+function frame() {
+  update();
+  cx.clearRect(0, 0, W, H);
+  drawLayer(bgImage);                                  // snow scene with empty imprints
+  const eng = drop.active ? drop.slot : (ACTIVE.has(game.phase) ? game.target : -1);
+  drawSlots(ALL_SLOTS, boxAssign, eng);                // resting boxes (skip the engaged one)
+  drawLayerTop(fg1, MID_FOREGROUND_BOTTOM_Y);          // mid drift over the resting box bases
+  drawLayer(fg2);                                      // front lip over the resting box bases
+  drawCane();                                          // OVER the foregrounds — reaches in front
+  drawActiveBox();                                     // on top of the cane -> hook behind the ribbon
+  drawDrop();                                          // a slipped box falling/bouncing
+  // Re-tuck the engaged box's base into the snow without covering the cane:
+  // fg2 is opaque only below the cane's reach; fg1's band is only re-applied for
+  // back-row boxes, where the cane stays above it.
+  if (eng >= 0) {
+    if (eng < BACK_SLOTS.length) drawLayerTop(fg1, MID_FOREGROUND_BOTTOM_Y);
+    drawLayer(fg2);
+  }
+  drawHUD();
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

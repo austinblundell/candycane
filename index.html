@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>MyCokeRewards Holiday Game (2011)</title>
 <style>
   html, body {
@@ -18,7 +18,7 @@
     inset: 0;
     width: 100%; height: 100%;
   }
-  canvas { display: block; width: 100%; height: 100%; cursor: pointer; }
+  canvas { display: block; width: 100%; height: 100%; cursor: pointer; touch-action: none; }
 </style>
 </head>
 <body>
@@ -39,6 +39,7 @@ function resize() {
   H = cv.height = window.innerHeight;
 }
 window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", resize);   // mobile rotate
 resize();
 
 /* ============================================================
@@ -205,6 +206,10 @@ function startPlay() {
 }
 window.addEventListener("keydown", e => { if (e.code === "Space") { e.preventDefault(); startPlay(); } });
 window.addEventListener("mousedown", startPlay);
+// Touch: preventDefault stops the browser's tap gestures (scroll/zoom) and the
+// synthetic mousedown that would otherwise follow. startPlay is a no-op unless a
+// play is ready, so an extra event can never start two plays.
+window.addEventListener("touchstart", e => { e.preventDefault(); startPlay(); }, { passive: false });
 
 function startSlip() {
   const b = boxOfSlot(game.target);
@@ -337,7 +342,7 @@ function drawHUD() {
     cx.font = "bold " + Math.round(H * 0.030) + "px Arial";
     cx.fillStyle = "rgba(20,50,80,0.92)";
     cx.textAlign = "center";
-    cx.fillText("Press SPACE or click to drop the candy cane!", W / 2, H * 0.93);
+    cx.fillText("Tap or press SPACE to drop the candy cane!", W / 2, H * 0.93);
   }
   if (game.popup) {
     const a = Math.min(1, game.popup.t / 25);

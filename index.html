@@ -104,13 +104,14 @@ const PRIZES = [
   { name: "$1,000 Visa Gift Card",          brand: "visa",      weight: 45 },     // 1 in 24,926
   { name: "$250 Southwest Gift Card",       brand: "southwest", weight: 90 },     // 1 in 12,463
   { name: "$100 Visa Gift Card",            brand: "visa",      weight: 1080 },   // 1 in 1,039
+  { name: "$25 Gap Gift Card",              brand: "gap",       weight: 2500 },   // 1 in 449
   { name: "AMC Voucher (2 tix + 2 drinks)", brand: "amc",       weight: 5000 },   // 1 in 224
   { name: "$5 Subway Gift Card",            brand: "subway",    weight: 6480 },   // 1 in 173
   { name: "Free Coke 12-Pack Coupon",       brand: "coke",      weight: 6480 },   // 1 in 173
   { name: "Free Coke Bottle Coupon",        brand: "coke",      weight: 12960 },  // 1 in 87
   { name: "10 MCR Bonus Points",            brand: "coke",      weight: 19705 },  // 1 in 57
 ];
-const NO_WIN_WEIGHT = 1069830;   // chosen so total = 1,121,670 and every prize keeps its listed odds
+const NO_WIN_WEIGHT = 1067330;   // total stays 1,121,670; Gap's weight comes out of the no-win pool
 const TOTAL_WEIGHT = NO_WIN_WEIGHT + PRIZES.reduce((s, p) => s + p.weight, 0);
 
 // Weighted roll: returns a prize, or null for "no win".
@@ -164,7 +165,7 @@ const cane = new Image(); cane.src = "candycane.png";
 const CANE_SCALE = 0.6;          // cane size in art units
 const CANE_GP = [70, 1305];      // hook "catch" point within the cane source image
 const TOP_HOOK_Y = 120;          // resting hook height near the top of the scene
-const SWEEP_SPEED = 4.5, SPEED_X = 5.5, SPEED_Y = 4.5;
+const SWEEP_SPEED = 13.5, SPEED_X = 16.5, SPEED_Y = 13.5;
 const SWEEP_MIN = 175, SWEEP_MAX = ART_W - 175;
 const BOW_FX = 0.50, BOW_FY = 0.12; // ribbon centre as a fraction of the box
 const LIFT_FRAC = 0.21;             // hook sits this far (× box height) above the ribbon
@@ -267,7 +268,7 @@ function updateGame() {
 }
 
 // Falling / bouncing box physics for a slipped (lost) grab.
-const GRAV = 1.3, RESTITUTION = 0.42, BOUNCE_STOP = 3.5;
+const GRAV = 1.3, RESTITUTION = 0.30, BOUNCE_STOP = 3.5;
 const ANG_STIFF = 0.11, ANG_DAMP = 0.90;
 function updateDrop() {
   if (!drop.active) return;
@@ -278,7 +279,7 @@ function updateDrop() {
     drop.bowCy = groundCy;
     if (Math.abs(drop.vy) > BOUNCE_STOP) {
       drop.vy = -drop.vy * RESTITUTION;    // bounce
-      const kick = Math.min(0.30, Math.abs(drop.vy) * 0.012 + 0.06);
+      const kick = Math.min(0.15, Math.abs(drop.vy) * 0.006 + 0.03);
       drop.angV += (Math.random() < 0.5 ? -1 : 1) * kick;   // knock it rocking
     } else {
       drop.vy = 0; drop.grounded = true;
